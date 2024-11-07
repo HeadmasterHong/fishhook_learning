@@ -76,7 +76,10 @@ static int prepend_rebindings(struct rebindings_entry **rebindings_head,
   }
   memcpy(new_entry->rebindings, rebindings, sizeof(struct rebinding) * nel);
   new_entry->rebindings_nel = nel;
+  // 将新建的new_entry的next指针指向当时的链表头rebindings_head，如果是第一次调用此方法new_entry->next指向*rebindings_head会是空指针
   new_entry->next = *rebindings_head;
+  // 将rebindings_head指向新建的new_entry
+  // 通过这种方式，_rebindings_head 始终指向最新的重绑定条目。
   *rebindings_head = new_entry;
   return 0;
 }
@@ -253,10 +256,22 @@ int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel) {
   // If this was the first call, register callback for image additions (which is also invoked for
   // existing images, otherwise, just run on existing images
   if (!_rebindings_head->next) {
+    // 如果_rebindings_head的next指针说明是第一次调用
+    // 如果这是第一次调用 rebind_symbols（即 _rebindings_head 为空），会通过 _dyld_register_func_for_add_image 注册 _rebind_symbols_for_image 作为加载新镜像时的回调函数，确保后续加载的镜像也会重绑定符号。
+    // _dyld_register_func_for_add_image 是一个系统函数，用于注册加载镜像时的回调。这是动态库重绑定的关键。
+    // •	镜像（Image）：代表的是一个可执行文件或动态库在内存中的映像，它的代码可以在运行时执行。每个镜像包括了所有函数和全局变量的信息，并会在进程启动或库加载时被加载到内存中。
+    // •	符号重绑定（Symbol Rebinding）：当你希望劫持或替换特定库函数的实现时，需要在动态库加载后“重绑定”相关符号，这样即便原始镜像中已存在的符号指向的是旧实现，重绑定操作也能将它们替换为新的实现。
+    // _dyld_register_func_for_add_image 函数会在每次加载新镜像时调用一个回调函数 _rebind_symbols_for_image。这个回调函数可以让我们遍历新加载的镜像中的符号表，从而对需要重绑定的符号重新分配地址指向新的实现。
     _dyld_register_func_for_add_image(_rebind_symbols_for_image);
   } else {
     uint32_t c = _dyld_image_count();
     for (uint32_t i = 0; i < c; i++) {
+      // 遍历所有已加载的镜像并调用 _rebind_symbols_for_image 对它们应用重绑定。
+      // _dyld_get_image_header 和 _dyld_get_image_vmaddr_slide 是 macOS 和 iOS 系统中的底层函数，它们由动态链接器 Dyld 提供，用于获取加载到进程内存中的镜像（Image）信息。
+      // 定义：const struct mach_header* _dyld_get_image_header(uint32_t image_index); 功能：返回指定镜像的头部指针。
+      // mach_header 结构 在 macOS 和 iOS 系统中，mach_header 结构体是 Mach-O（Mach Object）文件格式的头部，用于描述镜像的基础信息。通过获取 mach_header，可以访问镜像的许多元数据，例如文件的架构、加载命令的数量等。这些信息对于理解镜像的结构和内容至关重要。
+      // 定义：intptr_t _dyld_get_image_vmaddr_slide(uint32_t image_index); 功能：返回指定镜像在内存中的“虚拟地址滑动（VM address slide）”值。
+      // 虚拟地址滑动（VM Address Slide） “虚拟地址滑动”是由于 ASLR（地址空间布局随机化）机制引入的偏移量。ASLR 是一种安全措施，用于在程序每次运行时随机化镜像的加载地址，从而防止内存攻击。因此，镜像的真实加载地址可能与编译时的地址不同，_dyld_get_image_vmaddr_slide 返回的滑动值可以帮助计算出镜像的实际内存地址。
       _rebind_symbols_for_image(_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i));
     }
   }
